@@ -1,0 +1,17 @@
+{
+  "name": "flix-syncer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Chrome extension that detects what you watch on any site and syncs it to your Stremio library",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "watch": "node scripts/build.mjs --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.280",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.0"
+  }
+}

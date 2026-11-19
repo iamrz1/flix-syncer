@@ -1,0 +1,41 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body { font: 13px system-ui, sans-serif; width: 320px; margin: 12px; }
+      input[type="email"], input[type="password"], button { width: 100%; box-sizing: border-box; margin: 4px 0; padding: 6px; }
+      .muted { color: #666; }
+      .err { color: #b00020; margin-top: 6px; }
+      .card { border: 1px solid #ccc; border-radius: 6px; padding: 8px; margin-bottom: 8px; }
+      .card.detected { border-color: #2e7d32; background: #e8f5e9; }
+      .card.miss { border-color: #ef6c00; background: #fff3e0; }
+      .title { font-weight: 600; }
+      .row { display: flex; align-items: center; gap: 6px; margin: 6px 0; }
+      #log { max-height: 140px; overflow: auto; font: 11px ui-monospace, monospace; border: 1px solid #ddd; padding: 4px; white-space: pre-wrap; }
+      #debugInfo { font: 11px ui-monospace, monospace; margin-top: 6px; word-break: break-all; }
+    </style>
+  </head>
+  <body>
+    <div id="main" hidden>
+      <div id="card" class="card">
+        <div id="head" class="title"></div>
+        <div id="sub" class="muted"></div>
+        <div id="debugInfo" hidden></div>
+      </div>
+      <div id="warn" class="muted" hidden>Log in to sync detected titles.</div>
+      <label class="row"><input id="debug" type="checkbox" /> Debug view</label>
+      <div id="logWrap" hidden>
+        <div id="log"></div>
+      </div>
+      <button id="logoutBtn">Log out</button>
+    </div>
+    <div id="login" hidden>
+      <input id="email" type="email" placeholder="Stremio email" autocomplete="username" />
+      <input id="password" type="password" placeholder="Password" autocomplete="current-password" />
+      <button id="loginBtn">Log in</button>
+    </div>
+    <div id="error" class="err"></div>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

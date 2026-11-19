@@ -1,0 +1,105 @@
+name: Release
+
+# Conventional-commits-driven release pipeline:
+#   1. Every push to main lets release-please update a standing "Release PR"
+#      (version bump + CHANGELOG.md) derived from commit messages since the
+#      last release (feat: -> minor, fix: -> patch, "BREAKING CHANGE:" -> major).
+#   2. Merging that PR creates a GitHub Release + git tag.
+#   3. That tag triggers the build job, which sets the extension version in
+#      manifest.json to match, builds, and attaches flix-syncer-<version>.zip
+#      to the release. The repo is public, so the release is the download.
+on:
+  push:
+    branches: [main]
+  # Manual escape hatch: rebuild and re-attach the zip for an existing tag, e.g.
+  # when the build failed after release-please already created the tag.
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Existing release tag to build and attach the zip to (e.g. v0.1.0). Not needed for a dry run."
+        required: false
+      dry_run:
+        description: "Build the dispatched branch only: no tag, no upload."
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          release-type: simple
+
+  build:
+    needs: release-please
+    if: ${{ always() && (needs.release-please.outputs.release_created == 'true' || github.event_name == 'workflow_dispatch') }}
+    runs-on: ubuntu-latest
+    steps:
+      - id: resolve_tag
+        run: |
+          TAG="${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || needs.release-please.outputs.tag_name }}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      # A dry run builds the branch it was dispatched on; a real run builds the tag.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.dry_run && github.ref || steps.resolve_tag.outputs.tag }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      # release-please only manages the git tag and CHANGELOG.md, so set the
+      # extension version to match the tag. Chrome needs a plain 1.2.3 version.
+      - name: Set manifest version from release tag
+        if: ${{ !inputs.dry_run }}
+        run: |
+          TAG="${{ steps.resolve_tag.outputs.tag }}"
+          VERSION="${TAG#v}"
+          node -e '
+            const fs = require("fs");
+            const m = JSON.parse(fs.readFileSync("manifest.json", "utf8"));
+            m.version = process.argv[1];
+            fs.writeFileSync("manifest.json", JSON.stringify(m, null, 2) + "\n");
+          ' "$VERSION"
+
+      - run: npm run build
+
+      - name: Zip the extension
+        env:
+          TAG: ${{ steps.resolve_tag.outputs.tag }}
+        run: |
+          VERSION="${TAG#v}"
+          mkdir -p out
+          (cd dist && zip -r "../out/flix-syncer-${VERSION:-dryrun}.zip" . -x '*.map')
+          ls -l out
+
+      - name: Attach the zip to the GitHub Release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ steps.resolve_tag.outputs.tag }}" \
+            out/*.zip --clobber
+
+      # Lets a dry run be inspected without publishing anything.
+      - uses: actions/upload-artifact@v4
+        if: ${{ inputs.dry_run }}
+        with:
+          name: flix-syncer-dryrun
+          path: out/*.zip
