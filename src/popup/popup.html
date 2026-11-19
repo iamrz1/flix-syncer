@@ -13,10 +13,40 @@
       .title { font-weight: 600; }
       .row { display: flex; align-items: center; gap: 6px; margin: 6px 0; }
       #log { max-height: 140px; overflow: auto; font: 11px ui-monospace, monospace; border: 1px solid #ddd; padding: 4px; white-space: pre-wrap; }
+      .row input { flex: 1; min-width: 0; box-sizing: border-box; padding: 6px; }
+      .row button { width: auto; margin: 0; }
+      .result { display: flex; align-items: center; gap: 6px; padding: 4px 0; border-bottom: 1px solid #eee; }
+      .result .name { flex: 1; min-width: 0; }
+      .result .id { color: #666; font: 11px ui-monospace, monospace; }
+      .result input[type="number"] { width: 38px; padding: 3px; }
+      .result button { width: auto; margin: 0; padding: 3px 8px; }
+      #results { margin: 6px 0; }
+      details { margin: 6px 0 10px; }
+      details input { width: 100%; box-sizing: border-box; margin: 2px 0; padding: 5px; font: 11px ui-monospace, monospace; }
       #debugInfo { font: 11px ui-monospace, monospace; margin-top: 6px; word-break: break-all; }
     </style>
   </head>
   <body>
+    <div id="search">
+      <div class="row">
+        <input id="q" type="search" placeholder="Find a movie or series" />
+        <button id="qBtn">Search</button>
+      </div>
+      <div id="results"></div>
+      <div id="searchErr" class="err"></div>
+      <details>
+        <summary>Player URLs</summary>
+        <div class="muted">Movie</div>
+        <input id="movieUrl" spellcheck="false" />
+        <div class="muted">Series</div>
+        <input id="tvUrl" spellcheck="false" />
+        <div class="muted">Placeholders: {imdb} {tmdb} {season} {episode}</div>
+        <div class="row">
+          <button id="saveUrls">Save</button>
+          <button id="resetUrls">Reset</button>
+        </div>
+      </details>
+    </div>
     <div id="main" hidden>
       <div id="card" class="card">
         <div id="head" class="title"></div>

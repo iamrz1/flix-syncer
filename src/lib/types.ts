@@ -1,7 +1,24 @@
+/** A possible title found in the page or player, and where it came from. */
+export interface Candidate {
+  source: string;
+  text: string;
+}
+
 export interface ProgressMessage {
   kind: "progress";
   currentTime: number;
   duration: number;
+  /** Titles found near the video, most specific first. The tab title is added by the background. */
+  candidates: Candidate[];
+}
+
+/**
+ * Sent by any frame whose URL contains an IMDb id, playing or not. The frame
+ * holding the <video> is often nested inside the frame that has the id.
+ */
+export interface FrameUrlMessage {
+  kind: "frameUrl";
+  url: string;
 }
 
 export interface LoginMessage {
@@ -25,7 +42,7 @@ export interface SetDebugMessage {
   tabId?: number;
 }
 
-export type Message = ProgressMessage | LoginMessage | LogoutMessage | StatusRequest | SetDebugMessage;
+export type Message = ProgressMessage | FrameUrlMessage | LoginMessage | LogoutMessage | StatusRequest | SetDebugMessage;
 
 /**
  * detected: matched to an IMDb id (and an episode, for series).
@@ -41,6 +58,10 @@ export interface Detected {
   title: string;
   /** Title after cleanup, as sent to Cinemeta. */
   query: string;
+  /** Which candidate matched, e.g. "tab" or "player .vjs-title-bar". */
+  source: string | null;
+  /** One line per candidate tried, for the debug view. */
+  tried: string[];
   name: string | null;
   imdbId: string | null;
   type?: "movie" | "series";
