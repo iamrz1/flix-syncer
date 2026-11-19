@@ -21,6 +21,12 @@ The toolbar badge shows `•` when a movie or episode is detected and `✓` once
 
 Turn on "Debug view" in the popup to see why a page was not detected. It adds a `?` badge for misses, the raw and cleaned title, and a log of recent events (matched, no match, ignored short video, sync errors).
 
+An IMDb or TMDB id in a player URL (e.g. `/embed/movie/tt4154796`, `/embed/tv/1399/1/2`, `?tmdb=299534`) is used before any title. TMDB ids are mapped to IMDb ids through Wikidata, so a few very new titles may not resolve.
+
+## Search and open
+
+The popup has a search box. Results come from Cinemeta and show the IMDb id. "Open" fills a player URL template and opens it in a new tab. Edit the templates under "Player URLs"; the placeholders are `{imdb}`, `{tmdb}`, `{season}` and `{episode}`. The defaults use `vidsrc.mov`.
+
 ## Release
 
 Commits follow Conventional Commits. On every push to `main`, release-please updates a release PR with the version bump and `CHANGELOG.md`. Merging it creates the tag and GitHub Release, and the `Release` workflow attaches `flix-syncer-<version>.zip`. To rebuild the zip for an existing tag, run the workflow manually with `tag_name`.

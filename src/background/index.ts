@@ -1,6 +1,15 @@
-import { matchTitle, parseTitle, type Match } from "../lib/match";
+import {
+  isGeneric,
+  matchTitle,
+  parseTitle,
+  parseUrlId,
+  resolveId,
+  titleAgrees,
+  type Match,
+  type UrlId,
+} from "../lib/match";
 import { getLibraryItem, login, newLibraryItem, putLibraryItem } from "../lib/stremio";
-import type { Detected, LogEntry, Message, ProgressMessage, Status } from "../lib/types";
+import type { Candidate, Detected, LogEntry, Message, ProgressMessage, Status } from "../lib/types";
 
 // Fraction of the runtime at which an item counts as watched.
 const WATCHED_RATIO = 0.8;
@@ -16,13 +25,93 @@ const KEY_LOG = "log";
 type MatchCache = Record<string, Match | null>;
 type TabStates = Record<number, Detected>;
 
+// Renamed from "matches" to drop entries cached before generic titles were rejected.
+const KEY_MATCHES = "matches2";
+
 async function cachedMatch(title: string): Promise<Match | null> {
-  const { matches = {} } = (await chrome.storage.local.get("matches")) as { matches?: MatchCache };
+  const { [KEY_MATCHES]: matches = {} } = (await chrome.storage.local.get(KEY_MATCHES)) as {
+    [KEY_MATCHES]?: MatchCache;
+  };
   if (title in matches) return matches[title] ?? null;
   const m = await matchTitle(title);
   // Only cache hits; a miss may succeed later once the title settles.
-  if (m) await chrome.storage.local.set({ matches: { ...matches, [title]: m } });
+  if (m) await chrome.storage.local.set({ [KEY_MATCHES]: { ...matches, [title]: m } });
   return m;
+}
+
+/** Resolves an IMDb id from a URL, caching the lookup by id. Season and episode come from the URL. */
+// Ids that failed to resolve, so a playing video does not repeat the lookup every 10 seconds.
+// Lost when the worker restarts, which only costs one retry.
+const unresolved = new Set<string>();
+
+async function cachedById(u: UrlId): Promise<Match | null> {
+  const key = `id:${u.type ?? "?"}:${u.imdbId ?? `tmdb:${u.tmdbId}`}`;
+  if (unresolved.has(key)) return null;
+  const { [KEY_MATCHES]: matches = {} } = (await chrome.storage.local.get(KEY_MATCHES)) as {
+    [KEY_MATCHES]?: MatchCache;
+  };
+  let base = matches[key] ?? null;
+  if (!base) {
+    base = await resolveId({ imdbId: u.imdbId, tmdbId: u.tmdbId, type: u.type });
+    if (base) await chrome.storage.local.set({ [KEY_MATCHES]: { ...matches, [key]: base } });
+    else unresolved.add(key);
+  }
+  if (!base) return null;
+  return {
+    ...base,
+    season: base.type === "series" ? u.season : undefined,
+    episode: base.type === "series" ? u.episode : undefined,
+  };
+}
+
+/** Origin and path only, so the debug view and log never show query strings. */
+function shortUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    return u.origin + u.pathname;
+  } catch {
+    return url;
+  }
+}
+
+/**
+ * Tries IMDb ids found in URLs first, since they are exact, then each title
+ * candidate in order. Returns the first match, plus a line per attempt for the
+ * debug view.
+ */
+async function matchFirst(
+  urls: string[],
+  cands: Candidate[],
+): Promise<{ m: Match | null; source: string | null; tried: string[] }> {
+  const tried: string[] = [];
+  for (const url of urls) {
+    const u = parseUrlId(url);
+    if (!u) continue;
+    const m = await cachedById(u);
+    const id = u.imdbId ?? `tmdb ${u.tmdbId}`;
+    if (m && u.ambiguous) {
+      // A bare number after /movie/ may be the site's own id. If the page names
+      // a different title, do not trust it.
+      const queries = cands.map((c) => parseTitle(c.text).query).filter((q) => !isGeneric(q));
+      if (queries.length && !queries.some((q) => titleAgrees(q, m.name))) {
+        tried.push(`url: ${shortUrl(url)} -> ${id} is ${m.imdbId} "${m.name}", disagrees with the page title, skipped`);
+        continue;
+      }
+    }
+    tried.push(`url: ${shortUrl(url)} -> ${id} ${m ? `match ${m.imdbId}` : "unknown id"}`);
+    if (m) return { m, source: "url", tried };
+  }
+  for (const c of cands) {
+    const q = parseTitle(c.text).query;
+    if (isGeneric(q)) {
+      tried.push(`${c.source}: "${c.text}" -> "${q}" generic, skipped`);
+      continue;
+    }
+    const m = await cachedMatch(c.text);
+    tried.push(`${c.source}: "${c.text}" -> "${q}" ${m ? `match ${m.imdbId}` : "no match"}`);
+    if (m) return { m, source: c.source, tried };
+  }
+  return { m: null, source: null, tried };
 }
 
 function videoId(m: Match): string | null {
@@ -103,7 +192,29 @@ async function setBadge(tabId: number, d: Detected | null, debug: boolean): Prom
   if (text) await chrome.action.setBadgeBackgroundColor({ tabId, color });
 }
 
-async function onProgress(msg: ProgressMessage, tab: chrome.tabs.Tab | undefined): Promise<void> {
+/** URLs of frames in a tab that carry an IMDb id, reported by their content scripts. */
+async function getFrameUrls(tabId: number): Promise<string[]> {
+  const { frames = {} } = (await chrome.storage.session.get("frames")) as { frames?: Record<number, string[]> };
+  return frames[tabId] ?? [];
+}
+
+async function setFrameUrls(tabId: number, urls: string[] | null): Promise<void> {
+  const { frames = {} } = (await chrome.storage.session.get("frames")) as { frames?: Record<number, string[]> };
+  if (urls) frames[tabId] = urls;
+  else delete frames[tabId];
+  await chrome.storage.session.set({ frames });
+}
+
+async function addFrameUrl(tabId: number, url: string): Promise<void> {
+  const urls = await getFrameUrls(tabId);
+  if (!urls.includes(url)) await setFrameUrls(tabId, [...urls, url].slice(-10));
+}
+
+async function onProgress(
+  msg: ProgressMessage,
+  tab: chrome.tabs.Tab | undefined,
+  frameUrl: string | undefined,
+): Promise<void> {
   if (tab?.id === undefined) return;
   const tabId = tab.id;
   const title = tab.title ?? "";
@@ -114,6 +225,8 @@ async function onProgress(msg: ProgressMessage, tab: chrome.tabs.Tab | undefined
     state: "no-match",
     title,
     query: parseTitle(title).query,
+    source: null,
+    tried: [],
     name: null,
     imdbId: null,
     ratio: msg.currentTime / msg.duration,
@@ -124,14 +237,20 @@ async function onProgress(msg: ProgressMessage, tab: chrome.tabs.Tab | undefined
 
   const session = (await chrome.storage.session.get("synced")) as { synced?: Record<string, boolean> };
   const synced = session.synced ?? {};
-  const syncKey = `${tabId}:${title}`;
 
   let vid: string | null = null;
   let m: Match | null = null;
   if (msg.duration < MIN_DURATION_S) {
     d.state = "too-short";
-  } else if (title) {
-    m = await cachedMatch(title);
+  } else {
+    // Titles from the player first, since the tab title is often just the site name.
+    const cands = [...msg.candidates, ...(title ? [{ source: "tab", text: title }] : [])];
+    // The playing frame first, then frames that reported an id, then the tab URL.
+    const urls = [...new Set([frameUrl, ...(await getFrameUrls(tabId)), tab?.url].filter((u): u is string => !!u))];
+    const r = await matchFirst(urls, cands);
+    d.tried = r.tried;
+    d.source = r.source;
+    m = r.m;
     if (m) {
       vid = videoId(m);
       d.name = m.name;
@@ -142,6 +261,7 @@ async function onProgress(msg: ProgressMessage, tab: chrome.tabs.Tab | undefined
       d.state = vid ? "detected" : "no-episode";
     }
   }
+  const syncKey = `${tabId}:${vid ?? title}`;
   d.synced = !!synced[syncKey];
 
   if (m && vid && authKey && d.ratio >= WATCHED_RATIO && !d.synced) {
@@ -187,7 +307,10 @@ chrome.runtime.onMessage.addListener((msg: Message, sender, sendResponse) => {
   const run = async () => {
     switch (msg.kind) {
       case "progress":
-        await onProgress(msg, sender.tab);
+        await onProgress(msg, sender.tab, sender.url);
+        return undefined;
+      case "frameUrl":
+        if (sender.tab?.id !== undefined) await addFrameUrl(sender.tab.id, msg.url);
         return undefined;
       case "login": {
         const authKey = await login(msg.email, msg.password);
@@ -216,7 +339,11 @@ chrome.runtime.onMessage.addListener((msg: Message, sender, sendResponse) => {
 chrome.tabs.onUpdated.addListener((tabId, info) => {
   if (info.status === "loading") {
     void setTabState(tabId, null);
+    void setFrameUrls(tabId, null);
     void chrome.action.setBadgeText({ tabId, text: "" });
   }
 });
-chrome.tabs.onRemoved.addListener((tabId) => void setTabState(tabId, null));
+chrome.tabs.onRemoved.addListener((tabId) => {
+  void setTabState(tabId, null);
+  void setFrameUrls(tabId, null);
+});

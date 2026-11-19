@@ -1,3 +1,5 @@
+import { getTmdbId, searchTitles, type SearchResult } from "../lib/match";
+import { buildUrl, DEFAULT_PLAYER, loadPlayer, needsTmdb, savePlayer } from "../lib/player";
 import type { Detected, Message, Status } from "../lib/types";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -59,7 +61,9 @@ function render(s: Status): void {
       `title: ${d.title}`,
       `query: ${d.query}`,
       `imdb: ${d.imdbId ?? "-"}`,
+      `source: ${d.source ?? "-"}`,
       `progress: ${Math.round(d.ratio * 100)}% of ${Math.round(d.duration / 60)} min`,
+      ...(d.tried.length ? ["tried:", ...d.tried.map((t) => `  ${t}`)] : []),
     ].join("\n");
     info.style.whiteSpace = "pre-wrap";
   }
@@ -82,6 +86,89 @@ $("logoutBtn").addEventListener("click", async () => render(await send({ kind: "
 $("debug").addEventListener("change", async (e) =>
   render(await send({ kind: "setDebug", on: (e.target as HTMLInputElement).checked, tabId })),
 );
+
+// Search by title, then open the result in the configured player.
+
+async function openResult(r: SearchResult, season: number, episode: number): Promise<void> {
+  $("searchErr").textContent = "";
+  const p = await loadPlayer();
+  const template = r.type === "movie" ? p.movieUrl : p.tvUrl;
+  const tmdb = needsTmdb(template) ? await getTmdbId(r.type, r.imdbId) : undefined;
+  const url = buildUrl(template, { imdb: r.imdbId, tmdb, season, episode });
+  if (!url) {
+    $("searchErr").textContent = "Could not build a player URL. Check the template and that the title has a TMDB id.";
+    return;
+  }
+  await chrome.tabs.create({ url });
+}
+
+function resultRow(r: SearchResult): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "result";
+
+  const name = document.createElement("div");
+  name.className = "name";
+  const title = document.createElement("div");
+  title.textContent = `${r.name}${r.year ? ` (${r.year})` : ""}`;
+  const id = document.createElement("div");
+  id.className = "id";
+  id.textContent = `${r.type === "series" ? "TV" : "Movie"} ${r.imdbId}`;
+  name.append(title, id);
+  row.append(name);
+
+  const num = (label: string): HTMLInputElement => {
+    const i = document.createElement("input");
+    i.type = "number";
+    i.min = "1";
+    i.value = "1";
+    i.title = label;
+    return i;
+  };
+  const s = num("Season");
+  const e = num("Episode");
+  if (r.type === "series") row.append(s, e);
+
+  const open = document.createElement("button");
+  open.textContent = "Open";
+  open.addEventListener("click", () => void openResult(r, Number(s.value) || 1, Number(e.value) || 1));
+  row.append(open);
+  return row;
+}
+
+async function runSearch(): Promise<void> {
+  const results = $("results");
+  $("searchErr").textContent = "";
+  results.textContent = "Searching...";
+  try {
+    const found = await searchTitles($<HTMLInputElement>("q").value);
+    results.textContent = found.length ? "" : "No results.";
+    results.append(...found.map(resultRow));
+  } catch (err) {
+    results.textContent = "";
+    $("searchErr").textContent = `Search failed: ${String(err)}`;
+  }
+}
+
+$("qBtn").addEventListener("click", () => void runSearch());
+$("q").addEventListener("keydown", (e) => {
+  if ((e as KeyboardEvent).key === "Enter") void runSearch();
+});
+
+$("saveUrls").addEventListener("click", async () => {
+  await savePlayer({
+    movieUrl: $<HTMLInputElement>("movieUrl").value,
+    tvUrl: $<HTMLInputElement>("tvUrl").value,
+  });
+});
+$("resetUrls").addEventListener("click", async () => {
+  await savePlayer(DEFAULT_PLAYER);
+  $<HTMLInputElement>("movieUrl").value = DEFAULT_PLAYER.movieUrl;
+  $<HTMLInputElement>("tvUrl").value = DEFAULT_PLAYER.tvUrl;
+});
+
+const player = await loadPlayer();
+$<HTMLInputElement>("movieUrl").value = player.movieUrl;
+$<HTMLInputElement>("tvUrl").value = player.tvUrl;
 
 const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 tabId = tab?.id;
